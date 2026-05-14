@@ -11,7 +11,7 @@
 /* ── Electrician Template — Designed with love by owlos.sk ── */
 
 /* ── Demo disclaimer banner ── */
-#owlos-demo-banner{position:fixed;top:0;left:0;right:0;z-index:9999;background:rgba(15,15,20,.92);color:#fff;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;font:13px/1.4 system-ui,sans-serif;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+#owlos-demo-banner{position:fixed;top:0;left:0;right:0;z-index:99999;background:rgba(15,15,20,.95);color:#fff;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;font:13px/1.4 system-ui,sans-serif;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);border-bottom:1px solid rgba(0,144,238,.35)}
 #owlos-demo-ok{flex-shrink:0;background:#0090ee;color:#fff;border:none;padding:6px 16px;border-radius:4px;cursor:pointer;font:inherit;font-weight:600;white-space:nowrap}
 
 /* ── Reset & root ────────────────────────────────────────── */
@@ -1426,7 +1426,7 @@ document.querySelectorAll('.service-card,.why-card,.portfolio-item,.info-card').
 <script>
 /* Demo banner dismissal — localStorage persists across page reloads */
 (function(){
-  var KEY='owlos-demo-dismissed';
+  var KEY='owlos-demo-el'; /* unique per template — avoids collision when testing multiple templates locally */
   var banner=document.getElementById('owlos-demo-banner');
   if(!banner)return;
   if(localStorage.getItem(KEY)){banner.remove();return;}
