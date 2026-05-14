@@ -78,7 +78,7 @@ and data protection obligations of the deployed website.
 ## License
 
 MIT License — see [LICENSE](LICENSE).
-Replace `[Your Company Name]` in `LICENSE` with your actual company or personal name.
+
 
 ---
 
