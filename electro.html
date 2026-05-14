@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Elektro — schéma bytu</title>
+<style>
+* { margin:0;padding:0;box-sizing:border-box }
+html,body { width:100%;height:100%;background:#050a0f;overflow:hidden }
+canvas { display:block }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+const cv  = document.getElementById('c');
+const ctx = cv.getContext('2d');
+let W = 0, H = 0;
+function resize(){ W = cv.width = innerWidth; H = cv.height = innerHeight; }
+window.addEventListener('resize', resize); resize();
+
+/* ── Palette ──────────────────────────────────────────────── */
+// 5 circuits: lights-A, lights-B, outlets-A, outlets-B, high-power
+const CC = [
+  { h:'#0090ee', n:'#004a88', f:'#50d0ff' },
+  { h:'#00a8e0', n:'#005070', f:'#5ae0ff' },
+  { h:'#0068d0', n:'#00346a', f:'#2898ee' },
+  { h:'#0054c0', n:'#002860', f:'#2080e0' },
+  { h:'#0040a8', n:'#001e50', f:'#1870cc' },
+];
+const ON = [true, true, true, true, true]; // per-circuit
+
+/* ── Room outlines ────────────────────────────────────────── */
+const RM = [
+  { x:.07, y:.04, w:.34, h:.37 }, // kitchen
+  { x:.07, y:.41, w:.17, h:.20 }, // bathroom
+  { x:.07, y:.61, w:.17, h:.20 }, // toilet
+  { x:.24, y:.41, w:.20, h:.40 }, // hallway
+  { x:.44, y:.04, w:.27, h:.48 }, // room 1
+  { x:.44, y:.52, w:.27, h:.38 }, // room 2
+  { x:.71, y:.04, w:.26, h:.86 }, // big room
+];
+
+/* ── Wire segments  [ci, [[rx,ry],...]] ───────────────────── */
+const WS = [
+  // ─ Circuit 0: Kitchen + Bathroom + Toilet lighting ─
+  [0, [[.032,.50],[.032,.07],[.07,.07]]],                              // panel → kitchen top
+  [0, [[.07,.07],[.22,.07],[.22,.15]]],                               // → kitchen light 1
+  [0, [[.22,.07],[.38,.07],[.38,.18],[.15,.18],[.15,.23]]],           // → kitchen light 2
+  [0, [[.07,.07],[.07,.41],[.07,.52],[.21,.52],[.21,.50]]],           // → bath light
+  [0, [[.07,.52],[.07,.61],[.07,.71],[.21,.71],[.21,.70]]],           // → toilet light
+
+  // ─ Circuit 1: Hallway + Rooms + BigRoom lighting ─
+  [1, [[.032,.50],[.032,.29],[.24,.29]]],                             // panel → hall junction
+  [1, [[.24,.29],[.24,.41],[.25,.41],[.25,.57],[.34,.57],[.34,.62]]], // → hallway light
+  [1, [[.24,.29],[.24,.07],[.44,.07],[.44,.09]]],                    // → rooms feed
+  [1, [[.44,.09],[.57,.09],[.57,.25],[.55,.25]]],                    // → room1 light
+  [1, [[.44,.09],[.44,.52],[.44,.63],[.57,.63],[.57,.67]]],          // → room2 light
+  [1, [[.44,.09],[.71,.09]]],                                        // → bigroom feed
+  [1, [[.71,.09],[.84,.09],[.84,.18],[.81,.18]]],                    // → bigroom light 1
+  [1, [[.71,.09],[.71,.46],[.84,.46],[.81,.46]]],                    // → bigroom light 2
+  [1, [[.71,.09],[.71,.73],[.84,.73],[.81,.73]]],                    // → bigroom light 3
+
+  // ─ Circuit 2: Kitchen / wet-room outlets ─
+  [2, [[.032,.50],[.032,.39],[.07,.39]]],                            // panel → kitchen
+  [2, [[.07,.39],[.12,.39]]],                                        // outlet K1
+  [2, [[.07,.39],[.29,.39]]],                                        // outlet K2
+  [2, [[.29,.39],[.39,.39],[.39,.26]]],                              // outlet K3 (near stove)
+  [2, [[.07,.39],[.07,.79],[.24,.79],[.24,.78]]],                    // hall outlet
+  [2, [[.07,.79],[.07,.89],[.94,.89]]],                              // ground bus bottom
+
+  // ─ Circuit 3: Bedroom outlets ─
+  [3, [[.032,.50],[.032,.15],[.44,.15],[.44,.18]]],                  // panel → rooms feed
+  [3, [[.44,.18],[.44,.40],[.68,.40],[.65,.40]]],                    // room1 outlets
+  [3, [[.44,.40],[.68,.40],[.68,.09],[.71,.09]]],                    // feed bigroom
+  [3, [[.71,.09],[.94,.09],[.94,.20]]],                              // bigroom outlet 1
+  [3, [[.94,.09],[.94,.50]]],                                        // bigroom outlet 2
+  [3, [[.94,.09],[.94,.79]]],                                        // bigroom outlet 3
+  [3, [[.44,.18],[.44,.52],[.44,.66],[.65,.66]]],                    // room2 outlet
+  [3, [[.44,.18],[.46,.18]]],                                        // room1 outlet left
+
+  // ─ Circuit 4: High-power (boiler + stove) ─
+  [4, [[.032,.50],[.032,.19],[.38,.19],[.38,.12]]],                  // → boiler
+  [4, [[.38,.19],[.38,.29]]],                                        // → stove
+
+  // ─ Additional cross-connections (visual complexity) ─
+  [0, [[.07,.41],[.24,.41]]],                                        // bath top junction
+  [1, [[.24,.41],[.44,.41]]],                                        // hall-room1 connect
+  [2, [[.44,.41],[.71,.41]]],                                        // room1-bigroom mid
+  [3, [[.71,.41],[.94,.41]]],                                        // bigroom mid outlet
+  [1, [[.24,.80],[.44,.80]]],                                        // hall-room2 bottom
+  [2, [[.44,.80],[.71,.80]]],                                        // room2-bigroom bottom
+];
+
+/* ── Components ───────────────────────────────────────────── */
+const CM = [
+  // Kitchen
+  {t:'bulb',ci:0,x:.22,y:.15}, {t:'bulb',ci:0,x:.15,y:.23},
+  {t:'sw',  ci:0,x:.09,y:.21}, {t:'jn',  ci:0,x:.07,y:.07},
+  {t:'out', ci:2,x:.12,y:.39}, {t:'out', ci:2,x:.29,y:.39},
+  {t:'out', ci:2,x:.39,y:.26}, {t:'jn',  ci:2,x:.07,y:.39},
+  {t:'boil',ci:4,x:.38,y:.12}, {t:'stov',ci:4,x:.38,y:.29},
+  {t:'jn',  ci:4,x:.032,y:.19},
+  // Bathroom
+  {t:'bulb',ci:0,x:.21,y:.50}, {t:'sw',  ci:0,x:.09,y:.54},
+  {t:'jn',  ci:0,x:.07,y:.52},
+  // Toilet
+  {t:'bulb',ci:0,x:.21,y:.70}, {t:'sw',  ci:0,x:.09,y:.74},
+  {t:'jn',  ci:0,x:.07,y:.61},
+  // Hallway
+  {t:'bulb',ci:1,x:.34,y:.62}, {t:'sw',  ci:1,x:.26,y:.58},
+  {t:'out', ci:2,x:.24,y:.78}, {t:'jn',  ci:1,x:.24,y:.29},
+  {t:'jn',  ci:1,x:.24,y:.41}, {t:'jn',  ci:1,x:.24,y:.80},
+  // Room 1
+  {t:'bulb',ci:1,x:.55,y:.25}, {t:'sw',  ci:1,x:.45,y:.37},
+  {t:'out', ci:3,x:.65,y:.40}, {t:'out', ci:3,x:.46,y:.18},
+  {t:'jn',  ci:1,x:.44,y:.09}, {t:'jn',  ci:3,x:.44,y:.18},
+  {t:'jn',  ci:2,x:.44,y:.41},
+  // Room 2
+  {t:'bulb',ci:1,x:.57,y:.67}, {t:'sw',  ci:1,x:.45,y:.73},
+  {t:'out', ci:3,x:.65,y:.66}, {t:'jn',  ci:1,x:.44,y:.52},
+  {t:'jn',  ci:1,x:.44,y:.80},
+  // Big Room — 3 lights
+  {t:'bulb',ci:1,x:.81,y:.18}, {t:'bulb',ci:1,x:.81,y:.46},
+  {t:'bulb',ci:1,x:.81,y:.73},
+  {t:'sw',  ci:1,x:.72,y:.29}, {t:'sw',  ci:1,x:.72,y:.59},
+  {t:'out', ci:3,x:.94,y:.20}, {t:'out', ci:3,x:.94,y:.50},
+  {t:'out', ci:3,x:.94,y:.79},
+  {t:'jn',  ci:1,x:.71,y:.09}, {t:'jn',  ci:3,x:.94,y:.09},
+  {t:'jn',  ci:3,x:.94,y:.41}, {t:'jn',  ci:2,x:.71,y:.41},
+  {t:'jn',  ci:2,x:.94,y:.89}, {t:'jn',  ci:0,x:.07,y:.89},
+];
+
+/* ── Switches (hit-test list) ─────────────────────────────── */
+const SW = [
+  {x:.09,y:.21,ci:0}, {x:.09,y:.54,ci:0}, {x:.09,y:.74,ci:0},
+  {x:.26,y:.58,ci:1}, {x:.45,y:.37,ci:1}, {x:.45,y:.73,ci:1},
+  {x:.72,y:.29,ci:1}, {x:.72,y:.59,ci:1},
+];
+
+/* ── Particles ────────────────────────────────────────────── */
+const PT = [];
+WS.forEach((s, si) => {
+  for (let i = 0; i < 5; i++)
+    PT.push({ si, t: Math.random(), v: .003 + Math.random() * .003 });
+});
+
+let doff = 0;
+
+/* ── Helpers ──────────────────────────────────────────────── */
+function px(rx) { return rx * W; }
+function py(ry) { return ry * H; }
+
+function drawLine(pts, col, lw, dash, off) {
+  if (pts.length < 2) return;
+  ctx.strokeStyle = col;
+  ctx.lineWidth   = lw;
+  ctx.setLineDash(dash || []);
+  ctx.lineDashOffset = (off != null) ? -off : 0;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length - 1; i++)
+    ctx.arcTo(pts[i].x, pts[i].y, pts[i+1].x, pts[i+1].y, 10);
+  ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function mkPts(rp) { return rp.map(([x, y]) => ({ x: x*W, y: y*H })); }
+
+function drawWireSeg([ci, rp]) {
+  const cc  = CC[ci];
+  const on  = ON[ci];
+  const pts = mkPts(rp);
+
+  /* Base phase wire */
+  drawLine(pts, on ? cc.h : '#0a1e34', on ? 2.0 : 1.2);
+
+  /* Neutral companion — offset perpendicular to first segment */
+  if (pts.length >= 2) {
+    const dx = pts[1].x - pts[0].x, dy = pts[1].y - pts[0].y;
+    const l  = Math.sqrt(dx*dx + dy*dy) || 1;
+    const nx = -dy / l * 4, ny = dx / l * 4;
+    const np = pts.map(p => ({ x: p.x + nx, y: p.y + ny }));
+    drawLine(np, on ? cc.n : '#060e1e', on ? 1.4 : 0.8);
+  }
+
+  /* Animated current flow */
+  if (on) {
+    drawLine(pts, cc.f, 1.3, [8, 15], doff);
+    ctx.globalAlpha = 0.45;
+    drawLine(pts, cc.f, 0.8, [5, 18], doff * .65);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function ptXY(pts, t) {
+  const segs = [];
+  let tot = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i].x - pts[i-1].x, dy = pts[i].y - pts[i-1].y;
+    const l = Math.sqrt(dx*dx + dy*dy);
+    segs.push(l); tot += l;
+  }
+  let tgt = t * tot, acc = 0;
+  for (let i = 0; i < segs.length; i++) {
+    if (acc + segs[i] >= tgt) {
+      const f = (tgt - acc) / segs[i];
+      return { x: pts[i].x + (pts[i+1].x - pts[i].x)*f,
+               y: pts[i].y + (pts[i+1].y - pts[i].y)*f };
+    }
+    acc += segs[i];
+  }
+  return pts[pts.length-1];
+}
+
+/* ── Component drawers ────────────────────────────────────── */
+function drawBulb(x, y, on) {
+  if (on) {
+    const g = ctx.createRadialGradient(x, y, 0, x, y, 55);
+    g.addColorStop(0, 'rgba(255,200,40,.34)');
+    g.addColorStop(1, 'rgba(255,140,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(x, y, 55, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.fillStyle   = on ? '#ffe060' : '#101e28';
+  ctx.strokeStyle = on ? '#c8a010' : '#0e1c28';
+  ctx.lineWidth   = 1.5;
+  ctx.beginPath(); ctx.arc(x, y - 4, 13, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = on ? '#ff9000' : '#14282e';
+  ctx.lineWidth   = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x-4, y-2); ctx.bezierCurveTo(x-2,y-10,x+2,y+1,x,y-5);
+  ctx.bezierCurveTo(x-2,y-12,x+4,y-2,x+4,y-3); ctx.stroke();
+  ctx.fillStyle = on ? '#604010' : '#0c1820';
+  ctx.beginPath(); ctx.roundRect(x-5, y+8, 10, 6, 2); ctx.fill();
+}
+
+function drawSw(x, y, on) {
+  ctx.fillStyle   = on ? '#001e14' : '#070e18';
+  ctx.strokeStyle = on ? '#00cc60' : '#153040';
+  ctx.lineWidth   = 1.2;
+  ctx.beginPath(); ctx.roundRect(x-16, y-10, 32, 20, 6); ctx.fill(); ctx.stroke();
+  if (on) { ctx.shadowColor = '#00cc60'; ctx.shadowBlur = 8; }
+  ctx.fillStyle = on ? '#00cc60' : '#153040';
+  ctx.beginPath(); ctx.arc(on ? x+6 : x-6, y, 7, 0, Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function drawOut(x, y) {
+  ctx.fillStyle   = '#040b18';
+  ctx.strokeStyle = '#12385a';
+  ctx.lineWidth   = 1.2;
+  ctx.beginPath(); ctx.arc(x, y, 14, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#184a68';
+  ctx.beginPath();
+  ctx.roundRect(x-7, y-4, 3, 8, 1);
+  ctx.roundRect(x+4, y-4, 3, 8, 1);
+  ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y+6, 2, 0, Math.PI*2); ctx.fill();
+}
+
+function drawJn(x, y, col) {
+  ctx.fillStyle = col; ctx.shadowColor = col; ctx.shadowBlur = 6;
+  ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+function drawBoil(x, y, on) {
+  ctx.fillStyle   = on ? '#06101e' : '#040a10';
+  ctx.strokeStyle = on ? '#0e4080' : '#091828';
+  ctx.lineWidth   = 1.2;
+  ctx.beginPath(); ctx.roundRect(x-19, y-25, 38, 50, 8); ctx.fill(); ctx.stroke();
+  if (on) { ctx.shadowColor = '#ff4800'; ctx.shadowBlur = 9; }
+  ctx.strokeStyle = on ? '#ff5000' : '#160808';
+  ctx.lineWidth   = 2;
+  for (let i = 0; i < 3; i++) {
+    ctx.beginPath(); ctx.moveTo(x-11, y-8+i*9); ctx.lineTo(x+11, y-8+i*9); ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+}
+
+function drawStov(x, y, on) {
+  ctx.fillStyle   = on ? '#060f1c' : '#040810';
+  ctx.strokeStyle = on ? '#164070' : '#091626';
+  ctx.lineWidth   = 1.2;
+  ctx.beginPath(); ctx.roundRect(x-22, y-18, 44, 36, 7); ctx.fill(); ctx.stroke();
+  const pos = [[-10,-7],[10,-7],[-10,7],[10,7]];
+  pos.forEach(([bx, by_], i) => {
+    const hot = on && i < 2;
+    if (hot) { ctx.shadowColor = '#ff3800'; ctx.shadowBlur = 9; }
+    ctx.strokeStyle = hot ? '#ff4400' : '#160808';
+    ctx.fillStyle   = hot ? '#160504' : '#090303';
+    ctx.lineWidth   = hot ? 1.5 : 1;
+    ctx.beginPath(); ctx.arc(x+bx, y+by_, 7, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+    for (let r = 3; r <= 6; r += 1.5) {
+      ctx.strokeStyle = hot ? `rgba(255,70,0,${.4 - r*.05})` : 'rgba(40,12,12,.3)';
+      ctx.lineWidth   = .7;
+      ctx.beginPath(); ctx.arc(x+bx, y+by_, r, 0, Math.PI*2); ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+  });
+}
+
+/* ── Distribution panel ───────────────────────────────────── */
+function drawPanel(cx, cy) {
+  const ph = 190, pw = 24;
+  ctx.fillStyle   = '#030810';
+  ctx.strokeStyle = '#0c2850';
+  ctx.lineWidth   = 1.5;
+  ctx.beginPath(); ctx.roundRect(cx-pw/2, cy-ph/2, pw, ph, 5);
+  ctx.fill(); ctx.stroke();
+  for (let i = 0; i < 5; i++) {
+    const by = cy - 72 + i*36, act = ON[i];
+    ctx.fillStyle   = act ? '#003a1c' : '#07101c';
+    ctx.strokeStyle = act ? '#00b844' : '#0d2840';
+    ctx.lineWidth   = 1;
+    ctx.beginPath(); ctx.roundRect(cx-7, by-12, 14, 24, 3); ctx.fill(); ctx.stroke();
+    if (act) { ctx.shadowColor = '#00aa44'; ctx.shadowBlur = 6; }
+    ctx.fillStyle = act ? '#00cc44' : '#0d2030';
+    ctx.beginPath(); ctx.roundRect(cx-3, by-4, 6, 10, 2); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+}
+
+/* ── Grid ─────────────────────────────────────────────────── */
+function drawGrid() {
+  const g = 55;
+  ctx.strokeStyle = 'rgba(0,50,120,.055)';
+  ctx.lineWidth   = .5;
+  ctx.setLineDash([]);
+  for (let x = 0; x < W; x += g) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+  for (let y = 0; y < H; y += g) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  ctx.fillStyle = 'rgba(0,55,150,.09)';
+  for (let x = 0; x < W; x += g)
+    for (let y = 0; y < H; y += g) {
+      ctx.beginPath(); ctx.arc(x, y, 1, 0, Math.PI*2); ctx.fill();
+    }
+}
+
+/* ── Room outlines ────────────────────────────────────────── */
+function drawRooms() {
+  ctx.setLineDash([]);
+  RM.forEach(r => {
+    ctx.strokeStyle = 'rgba(22,65,125,.22)';
+    ctx.lineWidth   = 1.5;
+    ctx.fillStyle   = 'rgba(4,10,22,.52)';
+    ctx.beginPath();
+    ctx.roundRect(r.x*W, r.y*H, r.w*W, r.h*H, 3);
+    ctx.fill(); ctx.stroke();
+  });
+}
+
+/* ── Interaction ──────────────────────────────────────────── */
+cv.addEventListener('click', e => {
+  const r  = cv.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  SW.forEach(s => {
+    if (Math.abs(mx - s.x*W) < 22 && Math.abs(my - s.y*H) < 16)
+      ON[s.ci] = !ON[s.ci];
+  });
+  const ppx = .032*W;
+  for (let i = 0; i < 5; i++) {
+    const by = H*.50 - 72 + i*36;
+    if (Math.abs(mx - ppx) < 16 && Math.abs(my - by) < 18) ON[i] = !ON[i];
+  }
+});
+cv.addEventListener('mousemove', e => {
+  const r  = cv.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  let hit = false;
+  SW.forEach(s => { if (Math.abs(mx - s.x*W) < 22 && Math.abs(my - s.y*H) < 16) hit = true; });
+  const ppx = .032*W;
+  for (let i = 0; i < 5; i++) {
+    const by = H*.50 - 72 + i*36;
+    if (Math.abs(mx - ppx) < 16 && Math.abs(my - by) < 18) hit = true;
+  }
+  cv.style.cursor = hit ? 'pointer' : 'default';
+});
+
+/* ── Auto-switch ──────────────────────────────────────────── */
+(function auto() {
+  const i = Math.floor(Math.random() * ON.length);
+  ON[i] = !ON[i];
+  setTimeout(auto, 3200 + Math.random() * 5000);
+}());
+
+/* ── Main loop ────────────────────────────────────────────── */
+function draw() {
+  ctx.fillStyle = '#050a0f';
+  ctx.fillRect(0, 0, W, H);
+
+  drawGrid();
+  drawRooms();
+
+  /* Wires */
+  WS.forEach(drawWireSeg);
+
+  /* Particles */
+  PT.forEach(p => {
+    const [ci, rp] = WS[p.si];
+    if (!ON[ci]) { p.t = 0; return; }
+    p.t += p.v;
+    if (p.t > 1) p.t = 0;
+    const pts = mkPts(rp);
+    const pos = ptXY(pts, p.t);
+    const cc  = CC[ci];
+    ctx.globalAlpha = Math.sin(p.t * Math.PI) * .88;
+    ctx.fillStyle   = cc.f;
+    ctx.shadowColor = cc.f;
+    ctx.shadowBlur  = 7;
+    ctx.beginPath(); ctx.arc(pos.x, pos.y, 2.2, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  });
+
+  /* Components */
+  CM.forEach(c => {
+    const x = c.x*W, y = c.y*H, on = ON[c.ci], cc = CC[c.ci];
+    switch (c.t) {
+      case 'bulb': drawBulb(x, y, on); break;
+      case 'sw':   drawSw(x, y, on);   break;
+      case 'out':  drawOut(x, y);      break;
+      case 'boil': drawBoil(x, y, on); break;
+      case 'stov': drawStov(x, y, on); break;
+      case 'jn':   drawJn(x, y, on ? cc.h : '#0a2030'); break;
+    }
+  });
+
+  /* Panel */
+  drawPanel(.032*W, .50*H);
+
+  doff += 1.0;
+  requestAnimationFrame(draw);
+}
+
+draw();
+</script>
+</body>
+</html>
